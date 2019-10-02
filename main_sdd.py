@@ -43,7 +43,7 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder, img
         sdd_model, parallel_model = SDDModel(backbone, img_size, lr, dropout_rate, model_arc,
                                              use_multi_gpu=use_multi_gpu, gpu_count=gpu_count).get_model()
     else:
-        sdd_model = SDDModel(backbone, img_size, lr, dropout_rate).get_model()
+        sdd_model = SDDModel(backbone, img_size, lr, dropout_rate, model_arc).get_model()
     sdd_model.summary()
     utils.plot_model(sdd_model, str(artifacts_folder / 'model.png'), show_shapes=True)
     training_callbacks = [
