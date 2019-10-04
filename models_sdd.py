@@ -57,10 +57,14 @@ class SDDModel:
         scale = (img_height / 4) // h_t, (img_width / 4) // w_t
         x = layers.UpSampling2D(scale, interpolation='bilinear')(x)
         y = conv(backbone_model.get_layer(feature_layers[0]).output, 64, 1)
+        if use_cbam:
+            y = cbam(y)
         x = layers.concatenate([x, y])
         x = conv(x, num_filters=128, kernel_size=3)
         x = layers.SpatialDropout2D(self.dropout_rate)(x)
         x = conv(x, num_filters=128, kernel_size=3)
+        if use_cbam:
+            x = cbam(x)
         h_t, w_t = K.int_shape(x)[1:3]
         scale = img_height // h_t, img_width // w_t
         x = layers.UpSampling2D(size=scale, interpolation='bilinear')(x)
