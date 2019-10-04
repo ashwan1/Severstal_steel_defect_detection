@@ -1,18 +1,16 @@
+import segmentation_models as sm
+from classification_models.resnet import ResNet18
 from keras import backend as K
 from keras import layers, models, optimizers, utils
 from keras.applications.mobilenet_v2 import MobileNetV2
-from keras.applications.densenet import DenseNet121
-import segmentation_models as sm
 
-from classification_models.resnet import ResNet18
-from nn_blocks import jpu, aspp, conv, cbam
+from nn_blocks import aspp, conv, cbam
 
 
 class SDDModel:
     def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, n_classes=4,
                  accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4):
         self.backbone_name = backbone
-        # self.backbone, _ = Classifiers.get(backbone)
         self.input_shape = input_shape
         self.n_classes = n_classes
         self.lr = lr
@@ -31,9 +29,7 @@ class SDDModel:
         }
 
     def _build_model(self):
-        if self.model_arc == 'fcn':
-            self.model = self._get_fcn_model(use_aspp=True)
-        elif self.model_arc == 'unet':
+        if self.model_arc == 'unet':
             self.model = sm.Unet(self.backbone_name, input_shape=self.input_shape, classes=self.n_classes,
                                  activation='sigmoid', encoder_weights='imagenet')
         elif self.model_arc == 'deeplab':
@@ -64,33 +60,6 @@ class SDDModel:
         x = layers.concatenate([x, y])
         x = conv(x, num_filters=128, kernel_size=3)
         x = layers.SpatialDropout2D(self.dropout_rate)(x)
-        x = conv(x, num_filters=128, kernel_size=3)
-        h_t, w_t = K.int_shape(x)[1:3]
-        scale = img_height // h_t, img_width // w_t
-        x = layers.UpSampling2D(size=scale, interpolation='bilinear')(x)
-        x = layers.Conv2D(self.n_classes, (1, 1))(x)
-        o = layers.Activation('sigmoid', name='output_layer')(x)
-        return models.Model(inputs=backbone_model.input, outputs=o)
-
-    def _get_fcn_model(self, use_aspp=False):
-        img_height, img_width = self.input_shape[0], self.input_shape[1]
-        backbone_model = self.backbone(input_shape=self.input_shape, weights='imagenet',
-                                       include_top=False)
-        jpu_in_layers = self.jpu_in_layers[self.backbone_name]
-        jpu_inputs = [backbone_model.get_layer(l).output for l in jpu_in_layers]
-        x = jpu(jpu_inputs)
-        if use_aspp:
-            x = aspp(x)
-        h_t, w_t = K.int_shape(x)[1:3]
-        scale = (img_height / 4) // h_t, (img_width / 4) // w_t
-        x = layers.UpSampling2D(scale, interpolation='bilinear')(x)
-        x_backbone = None
-        if self.backbone_name == 'resnet18':
-            x_backbone = backbone_model.get_layer('stage2_unit1_relu1').output
-        x_backbone = conv(x_backbone, 64, 1)
-        x = layers.Concatenate()([x, x_backbone])
-        x = conv(x, num_filters=128, kernel_size=3)
-        x = layers.Dropout(self.dropout_rate)(x)
         x = conv(x, num_filters=128, kernel_size=3)
         h_t, w_t = K.int_shape(x)[1:3]
         scale = img_height // h_t, img_width // w_t
