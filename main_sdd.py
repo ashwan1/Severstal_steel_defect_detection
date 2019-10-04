@@ -11,9 +11,10 @@ from sklearn.model_selection import train_test_split
 
 from models_sdd import SDDModel
 from utils.data_utils import DataSequence
+from custom_objects.callbacks import ObserveMetrics
 
 _CUDA_VISIBLE_DEVICES = "3"
-_MODEL_ARC = 'deeplab'
+_MODEL_ARC = 'deeplab_cbam'
 os.environ["CUDA_VISIBLE_DEVICES"] = _CUDA_VISIBLE_DEVICES
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
@@ -24,21 +25,21 @@ ex.captured_out_filter = apply_backspaces_and_linefeeds
 
 
 # noinspection PyUnusedLocal
-@ex.config()
+@ex.config
 def config():
     seed = 42
     gpu_count = len(_CUDA_VISIBLE_DEVICES.split(','))
-    backbone = 'resnet18',
-    batch_size = 4,
+    backbone = 'resnet18'
+    batch_size = 4
     lr = 0.0001
     dropout_rate = 0.2
     data_path = 'data'
-    artifacts_folder = f'artifacts/{_MODEL_ARC}/{time.strftime("%d-%m-%y_%H:%M", time.localtime())}',
-    img_size = (256, 1600, 3),
+    artifacts_folder = f'artifacts/{_MODEL_ARC}/{time.strftime("%d-%m-%y_%H:%M", time.localtime())}'
+    img_size = (256, 1600, 3)
     use_multi_gpu = gpu_count > 1
 
 
-@ex.automain()
+@ex.automain
 def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
         img_size, use_multi_gpu, gpu_count, seed, _run):
     artifacts_folder = Path(artifacts_folder)
@@ -74,13 +75,15 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
         sdd_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC).get_model()
     sdd_model.summary()
     utils.plot_model(sdd_model, str(artifacts_folder / 'model.png'), show_shapes=True)
+
     training_callbacks = [
         callbacks.ReduceLROnPlateau(patience=3, verbose=1),
         callbacks.EarlyStopping(patience=5, verbose=1, restore_best_weights=True),
         callbacks.ModelCheckpoint(str(ckpt_path / 'model-{epoch:04d}-{val_loss:.4f}.hdf5'),
                                   verbose=1, save_best_only=True),
         callbacks.TensorBoard(log_dir=str(artifacts_folder / 'tb_logs')),
-        callbacks.TerminateOnNaN()
+        callbacks.TerminateOnNaN(),
+        ObserveMetrics(_run)
     ]
 
     train_seq = DataSequence(seed, train_df, batch_size, img_size, 'data/train_images', shuffle=True, augment=True)
@@ -89,7 +92,7 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
         training_model = parallel_model
     else:
         training_model = sdd_model
-    history = training_model.fit_generator(train_seq, epochs=100, verbose=1, callbacks=training_callbacks,
+    history = training_model.fit_generator(train_seq, epochs=100, verbose=2, callbacks=training_callbacks,
                                            validation_data=val_seq, max_queue_size=4, workers=4,
                                            use_multiprocessing=True)
     models.save_model(sdd_model, str(artifacts_folder / 'model_best.h5'))

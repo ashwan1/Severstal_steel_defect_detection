@@ -5,7 +5,7 @@ from keras.applications.densenet import DenseNet121
 import segmentation_models as sm
 
 from classification_models.resnet import ResNet18
-from nn_blocks import jpu, aspp, conv
+from nn_blocks import jpu, aspp, conv, cbam
 
 
 class SDDModel:
@@ -38,11 +38,13 @@ class SDDModel:
                                  activation='sigmoid', encoder_weights='imagenet')
         elif self.model_arc == 'deeplab':
             self.model = self._get_deeplab_v3()
+        elif self.model_arc == 'deeplab_cbam':
+            self.model = self._get_deeplab_v3(use_cbam=True)
 
         if self.use_multi_gpu:
             self.parallel_model = utils.multi_gpu_model(self.model, gpus=self.gpu_count, cpu_relocation=True)
 
-    def _get_deeplab_v3(self):
+    def _get_deeplab_v3(self, use_cbam=False):
         img_height, img_width = self.input_shape[0], self.input_shape[1]
         backbone_model = None
         if self.backbone_name == 'resnet18':
@@ -52,6 +54,8 @@ class SDDModel:
         assert backbone_model is not None, f'backbone should be one of {list(self.feature_layers.keys())}'
         feature_layers = self.feature_layers[self.backbone_name]
         img_features = backbone_model.get_layer(feature_layers[2]).output
+        if use_cbam:
+            img_features = cbam(img_features)
         x = aspp(img_features)
         h_t, w_t = K.int_shape(x)[1:3]
         scale = (img_height / 4) // h_t, (img_width / 4) // w_t
