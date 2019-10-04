@@ -8,7 +8,7 @@ from nn_blocks import aspp, conv, cbam
 
 
 class SDDModel:
-    def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, n_classes=4,
+    def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, use_cbam=False, n_classes=4,
                  accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4):
         self.backbone_name = backbone
         self.input_shape = input_shape
@@ -16,6 +16,7 @@ class SDDModel:
         self.lr = lr
         self.dropout_rate = dropout_rate
         self.model_arc = model_arc
+        self.use_cbam = use_cbam
         self.accum_steps = accum_steps
         self.layer_lrs = layer_lrs
         self.model = None
@@ -36,13 +37,15 @@ class SDDModel:
             self.model = self._get_deeplab_v3()
         elif self.model_arc == 'deeplab_cbam':
             self.model = self._get_deeplab_v3(use_cbam=True)
-
+        elif self.model_arc == 'deeplab_classification_binary':
+            self.model = self._get_deeplab_v3(use_cbam=self.use_cbam, classification=True)
         if self.use_multi_gpu:
             self.parallel_model = utils.multi_gpu_model(self.model, gpus=self.gpu_count, cpu_relocation=True)
 
-    def _get_deeplab_v3(self, use_cbam=False):
+    def _get_deeplab_v3(self, use_cbam=False, classification=False):
         img_height, img_width = self.input_shape[0], self.input_shape[1]
         backbone_model = None
+        c_o = None
         if self.backbone_name == 'resnet18':
             backbone_model = ResNet18(input_shape=self.input_shape, include_top=False, weights='imagenet')
         elif self.backbone_name == 'mobilenetv2':
@@ -52,6 +55,10 @@ class SDDModel:
         img_features = backbone_model.get_layer(feature_layers[2]).output
         if use_cbam:
             img_features = cbam(img_features)
+        if classification:
+            c = layers.concatenate([layers.GlobalAvgPool2D()(img_features),
+                                    layers.GlobalMaxPool2D()(img_features)])
+            c_o = layers.Dense(1, activation='sigmoid', name='classification_output')(c)
         x = aspp(img_features)
         h_t, w_t = K.int_shape(x)[1:3]
         scale = (img_height / 4) // h_t, (img_width / 4) // w_t
@@ -70,16 +77,28 @@ class SDDModel:
         x = layers.UpSampling2D(size=scale, interpolation='bilinear')(x)
         x = layers.Conv2D(self.n_classes, (1, 1))(x)
         o = layers.Activation('sigmoid', name='output_layer')(x)
-        return models.Model(inputs=backbone_model.input, outputs=o)
+        if classification:
+            return models.Model(inputs=backbone_model.input, outputs=[c_o, o])
+        else:
+            return models.Model(inputs=backbone_model.input, outputs=o)
 
     def _compile(self):
         optimizer = optimizers.Adam(lr=self.lr)
         if self.use_multi_gpu:
-            self.parallel_model.compile(optimizer, sm.losses.bce_dice_loss,
-                                        metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
+            self._compile_model(self.parallel_model, optimizer)
         else:
-            self.model.compile(optimizer, sm.losses.bce_dice_loss,
-                               metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
+            self._compile_model(self.model, optimizer)
+
+    def _compile_model(self, model, optimizer):
+        if self.model_arc == 'deeplab_classification_binary':
+            model.compile(optimizer, ['binary_crossentropy', sm.losses.bce_dice_loss],
+                          metrics={
+                              'classification_output': ['accuracy'],
+                              'output_layer': [sm.metrics.iou_score, sm.metrics.f1_score]
+                          })
+        else:
+            model.compile(optimizer, sm.losses.bce_dice_loss,
+                          metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
 
     def get_model(self):
         self._build_model()

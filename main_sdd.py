@@ -13,8 +13,8 @@ from models_sdd import SDDModel
 from utils.data_utils import DataSequence
 from custom_objects.callbacks import ObserveMetrics
 
-_CUDA_VISIBLE_DEVICES = "3"
-_MODEL_ARC = 'deeplab_cbam'
+_CUDA_VISIBLE_DEVICES = "2"
+_MODEL_ARC = 'deeplab_classification_binary'
 os.environ["CUDA_VISIBLE_DEVICES"] = _CUDA_VISIBLE_DEVICES
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
@@ -37,11 +37,13 @@ def config():
     artifacts_folder = f'artifacts/{_MODEL_ARC}/{time.strftime("%d-%m-%y_%H:%M", time.localtime())}'
     img_size = (256, 1600, 3)
     use_multi_gpu = gpu_count > 1
+    use_cbam = False
+    do_classification = _MODEL_ARC == 'deeplab_classification_binary'
 
 
 @ex.automain
 def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
-        img_size, use_multi_gpu, gpu_count, seed, _run):
+        img_size, use_multi_gpu, gpu_count, use_cbam, do_classification, seed, _run):
     artifacts_folder = Path(artifacts_folder)
     artifacts_folder.mkdir(parents=True, exist_ok=True)
     data_path = Path(data_path)
@@ -70,9 +72,10 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
     parallel_model = None
     if use_multi_gpu:
         sdd_model, parallel_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC,
-                                             use_multi_gpu=use_multi_gpu, gpu_count=gpu_count).get_model()
+                                             use_multi_gpu=use_multi_gpu, gpu_count=gpu_count,
+                                             use_cbam=use_cbam).get_model()
     else:
-        sdd_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC).get_model()
+        sdd_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC, use_cbam=use_cbam).get_model()
     sdd_model.summary()
     utils.plot_model(sdd_model, str(artifacts_folder / 'model.png'), show_shapes=True)
 
@@ -86,8 +89,10 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
         ObserveMetrics(_run)
     ]
 
-    train_seq = DataSequence(seed, train_df, batch_size, img_size, 'data/train_images', shuffle=True, augment=True)
-    val_seq = DataSequence(seed, val_df, batch_size, img_size, 'data/train_images', shuffle=False, augment=False)
+    train_seq = DataSequence(seed, train_df, batch_size, img_size, 'data/train_images', shuffle=True,
+                             augment=True, classification=do_classification)
+    val_seq = DataSequence(seed, val_df, batch_size, img_size, 'data/train_images', shuffle=False,
+                           augment=False, classification=do_classification)
     if use_multi_gpu:
         training_model = parallel_model
     else:

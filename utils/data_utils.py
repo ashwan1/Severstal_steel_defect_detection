@@ -8,7 +8,8 @@ from utils.rle_utils import rle2mask
 
 class DataSequence(Sequence):
     def __init__(self, seed, df, batch_size, img_size,
-                 base_path, train=True, n_classes=4, shuffle=False, augment=False):
+                 base_path, train=True, n_classes=4, shuffle=False,
+                 augment=False, classification=False):
         self.seed = seed
         self.df = df
         self.batch_size = batch_size
@@ -18,6 +19,7 @@ class DataSequence(Sequence):
         self.n_classes = n_classes
         self.shuffle = shuffle
         self.augment = augment
+        self.classification = classification
 
     def __len__(self):
         return int(np.ceil(len(self.df.index) / float(self.batch_size)))
@@ -27,6 +29,8 @@ class DataSequence(Sequence):
         masks = None
         batch = self.df[idx * self.batch_size: (idx + 1) * self.batch_size].reset_index(drop=True)
         images = np.zeros((len(batch.index), self.height, self.width, self.n_channels))
+        if self.classification:
+            is_defective = np.zeros((len(batch.index), 1), dtype='int')
         if self.train:
             masks = np.zeros((len(batch.index), self.height, self.width, self.n_classes), dtype='int')
         for row in batch.itertuples():
@@ -42,8 +46,13 @@ class DataSequence(Sequence):
                 rles = row[2:-1]
                 mask = self.build_mask(rles, flip_direction)
                 masks[row.Index] = mask
+            if self.classification:
+                is_defective[row.Index] = row.defect_count > 0
         if self.train:
-            return images, masks
+            if self.classification:
+                return images, [is_defective, masks]
+            else:
+                return images, masks
         else:
             return images
 
