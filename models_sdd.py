@@ -58,6 +58,7 @@ class SDDModel:
         if classification:
             c = layers.concatenate([layers.GlobalAvgPool2D()(img_features),
                                     layers.GlobalMaxPool2D()(img_features)])
+            c = layers.Dropout(self.dropout_rate)(c)
             c_o = layers.Dense(1, activation='sigmoid', name='classification_output')(c)
         x = aspp(img_features)
         h_t, w_t = K.int_shape(x)[1:3]
