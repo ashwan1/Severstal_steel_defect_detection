@@ -14,7 +14,7 @@ from utils.data_utils import DataSequence
 from custom_objects.callbacks import ObserveMetrics
 
 _CUDA_VISIBLE_DEVICES = "2"
-_MODEL_ARC = 'deeplab_classification_binary'
+_MODEL_ARC = 'deeplab'
 os.environ["CUDA_VISIBLE_DEVICES"] = _CUDA_VISIBLE_DEVICES
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
@@ -29,12 +29,12 @@ ex.captured_out_filter = apply_backspaces_and_linefeeds
 def config():
     seed = 42
     gpu_count = len(_CUDA_VISIBLE_DEVICES.split(','))
-    backbone = 'resnet18'
+    backbone = 'efficientnetb3'
     batch_size = 4
     lr = 0.0001
     dropout_rate = 0.2
     data_path = 'data'
-    artifacts_folder = f'artifacts/{_MODEL_ARC}/{time.strftime("%d-%m-%y_%H:%M", time.localtime())}'
+    artifacts_folder = f'artifacts/{_MODEL_ARC}/{backbone}/{time.strftime("%d-%m-%y_%H:%M", time.localtime())}'
     img_size = (256, 1600, 3)
     use_multi_gpu = gpu_count > 1
     use_cbam = False
