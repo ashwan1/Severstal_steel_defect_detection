@@ -127,7 +127,7 @@ class SDDModel:
                               'output_layer': [sm.metrics.iou_score, sm.metrics.f1_score]
                           })
         else:
-            model.compile(optimizer, sm.losses.bce_dice_loss,
+            model.compile(optimizer, sm.losses.bce_jaccard_loss,
                           metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
 
     def get_model(self):

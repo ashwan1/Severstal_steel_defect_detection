@@ -13,7 +13,7 @@ from models_sdd import SDDModel
 from utils.data_utils import DataSequence
 from custom_objects.callbacks import ObserveMetrics
 
-_CUDA_VISIBLE_DEVICES = "2"
+_CUDA_VISIBLE_DEVICES = "3"
 _MODEL_ARC = 'deeplab'
 os.environ["CUDA_VISIBLE_DEVICES"] = _CUDA_VISIBLE_DEVICES
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -29,8 +29,8 @@ ex.captured_out_filter = apply_backspaces_and_linefeeds
 def config():
     seed = 42
     gpu_count = len(_CUDA_VISIBLE_DEVICES.split(','))
-    backbone = 'efficientnetb3'
-    batch_size = 4
+    backbone = 'resnet18'
+    batch_size = 5
     lr = 0.0001
     dropout_rate = 0.2
     data_path = 'data'
