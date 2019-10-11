@@ -20,13 +20,18 @@ class DataSequence(Sequence):
         self.shuffle = shuffle
         self.augment = augment
         self.classification = classification
+        self.resize = False
+        if img_size != (256, 1600, 3):
+            self.max_x = 1600 - img_size[1]
+            self.max_y = 256 - img_size[0]
+            self.resize = True
 
     def __len__(self):
         return int(np.ceil(len(self.df.index) / float(self.batch_size)))
 
     def __getitem__(self, idx):
-        flip_direction = None
         masks = None
+        is_defective = None
         batch = self.df[idx * self.batch_size: (idx + 1) * self.batch_size].reset_index(drop=True)
         images = np.zeros((len(batch.index), self.height, self.width, self.n_channels))
         if self.classification:
@@ -35,16 +40,32 @@ class DataSequence(Sequence):
             masks = np.zeros((len(batch.index), self.height, self.width, self.n_classes), dtype='int')
         for row in batch.itertuples():
             image = cv2.imread(f'{self.base_path}/{row.image_id}')
-            assert image.shape == (self.height, self.width, self.n_channels), \
-                f'Image shape not as expected, got {image.shape}, expected {(self.height, self.width, self.n_channels)}'
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            if self.augment:
-                flip_direction = random.choice([-1, 0, 1])
-                image = self.augment_image(image, row.defect_count, flip_direction=flip_direction)
-            images[row.Index] = image / 255.
+            mask = None
             if self.train:
                 rles = row[2:-1]
-                mask = self.build_mask(rles, flip_direction)
+                mask = self.build_mask(rles)
+            if self.resize:
+                x = np.random.randint(0, self.max_x)
+                y = np.random.randint(0, self.max_y)
+                image = image[y: y + self.height, x: x + self.width]
+                mask = mask[y: y + self.height, x: x + self.width]
+            assert image.shape == (self.height, self.width, self.n_channels), \
+                f'Image shape not as expected, got {image.shape}, expected {(self.height, self.width, self.n_channels)}'
+            assert mask.shape == (self.height, self.width, self.n_classes), \
+                f'Mask shape not as expected, got {mask.shape}, expected {(self.height, self.width, self.n_classes)}'
+            if self.augment:
+                flip_direction = random.choice([-1, 0, 1])
+                crop_hw = [random.choice(range(10, self.height // 10)), random.choice(range(10, self.width // 10))]
+                transformation_matrix = np.float32([[1, 0, random.choice(range(-self.width // 4, self.width // 4))],
+                                                    [0, 1,
+                                                     random.choice(range(-self.height // 10, self.height // 10))]])
+                image, mask = self.augment_image_and_mask(image, mask, row.defect_count,
+                                                          flip_direction=flip_direction,
+                                                          crop_hw=crop_hw,
+                                                          transformation_matrix=transformation_matrix)
+            images[row.Index] = image / 255.
+            if self.train:
                 masks[row.Index] = mask
             if self.classification:
                 is_defective[row.Index] = row.defect_count > 0
@@ -60,8 +81,10 @@ class DataSequence(Sequence):
         if self.shuffle:
             self.df = self.df.sample(frac=1, random_state=self.seed).reset_index(drop=True)
 
-    def augment_image(self, image, defect_count, flip_direction):
+    def augment_image_and_mask(self, image, mask, defect_count, flip_direction, crop_hw, transformation_matrix):
         image = cv2.flip(image, flip_direction)
+        if mask is not None:
+            mask = cv2.flip(mask, flip_direction)
         if random.random() > 0.5:
             alpha = random.uniform(1.0, 2.0)  # Simple contrast control
             image = cv2.convertScaleAbs(image, alpha=alpha, beta=0)
@@ -72,26 +95,19 @@ class DataSequence(Sequence):
             if random.random() > 0.7:
                 image = self.illuminate(image)
             if random.random() > 0.5:
-                crop_hw = [random.choice(range(10, self.height // 10)), random.choice(range(10, self.width // 10))]
                 image = image[crop_hw[0]:-crop_hw[0], crop_hw[1]:-crop_hw[1], :]
                 image = cv2.resize(image, (self.width, self.height))
             if random.random() > 0.5:
-                transformation_matrix = np.float32([[1, 0, random.choice(range(-self.width // 4, self.width // 4))],
-                                                    [0, 1,
-                                                     random.choice(range(-self.height // 10, self.height // 10))]])
                 image = cv2.warpAffine(image, transformation_matrix, (self.width, self.height))
-        return image
+        return image, mask
 
-    def build_mask(self, rles, flip_direction=None):
+    def build_mask(self, rles):
         assert self.n_classes == len(rles), 'length of rles should be same as number of classes'
-        mask = np.zeros((self.height, self.width, self.n_classes), dtype='int')
+        mask = np.zeros((256, 1600, self.n_classes), dtype='int')
         for i, rle in enumerate(rles):
             if type(rle) is str:
-                m = rle2mask(rle, (self.width, self.height))
-                if flip_direction is not None:
-                    mask[:, :, i] = cv2.flip(m, flip_direction)
-                else:
-                    mask[:, :, i] = m
+                m = rle2mask(rle)
+                mask[:, :, i] = m
         return mask
 
     def illuminate(self, image):

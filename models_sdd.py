@@ -4,13 +4,15 @@ from efficientnet.keras import EfficientNetB0, EfficientNetB1, EfficientNetB3, E
 from keras import backend as K
 from keras import layers, models, optimizers, utils
 from keras.applications.mobilenet_v2 import MobileNetV2
+from keras_lookahead import Lookahead
+from keras_radam import RAdam
 
 from nn_blocks import aspp, conv, cbam
 
 
 class SDDModel:
     def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, use_cbam=False, n_classes=4,
-                 accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4):
+                 accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4, optimizer='adam'):
         self.backbone_name = backbone
         self.input_shape = input_shape
         self.n_classes = n_classes
@@ -23,6 +25,7 @@ class SDDModel:
         self.model = None
         self.use_multi_gpu = use_multi_gpu
         self.gpu_count = gpu_count
+        self.optimizer = optimizer
         self.feature_layers = {
             # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
             'resnet18': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
@@ -113,7 +116,14 @@ class SDDModel:
         return backbone_model
 
     def _compile(self):
-        optimizer = optimizers.Adam(lr=self.lr)
+        optimizer = None
+        if self.optimizer == 'adam':
+            optimizer = optimizers.Adam(lr=self.lr)
+        elif self.optimizer == 'ranger':
+            optimizer = Lookahead(RAdam(learning_rate=self.lr))
+        elif self.optimizer == 'la_adam':
+            optimizer = Lookahead(optimizers.Adam(lr=self.lr))
+
         if self.use_multi_gpu:
             self._compile_model(self.parallel_model, optimizer)
         else:
@@ -127,7 +137,7 @@ class SDDModel:
                               'output_layer': [sm.metrics.iou_score, sm.metrics.f1_score]
                           })
         else:
-            model.compile(optimizer, sm.losses.bce_jaccard_loss,
+            model.compile(optimizer, sm.losses.bce_dice_loss,
                           metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
 
     def get_model(self):
