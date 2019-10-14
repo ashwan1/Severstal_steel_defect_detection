@@ -2,7 +2,7 @@ import segmentation_models as sm
 from classification_models.resnet import ResNet18, ResNet34
 from efficientnet.keras import EfficientNetB0, EfficientNetB1, EfficientNetB3, EfficientNetB5
 from keras import backend as K
-from keras import layers, models, optimizers, utils
+from keras import layers, models, optimizers
 from keras.applications.mobilenet_v2 import MobileNetV2
 
 from nn_blocks import aspp, conv, cbam, se_block
@@ -10,7 +10,7 @@ from nn_blocks import aspp, conv, cbam, se_block
 
 class SDDModel:
     def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, use_cbam=False, use_se=False,
-                 n_classes=4, accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4):
+                 n_classes=4, accum_steps=0, layer_lrs=None):
         self.backbone_name = backbone
         self.input_shape = input_shape
         self.n_classes = n_classes
@@ -22,8 +22,6 @@ class SDDModel:
         self.accum_steps = accum_steps
         self.layer_lrs = layer_lrs
         self.model = None
-        self.use_multi_gpu = use_multi_gpu
-        self.gpu_count = gpu_count
         self.feature_layers = {
             # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
             'resnet18': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
@@ -53,8 +51,6 @@ class SDDModel:
             self.model = self._get_deeplab_v3(use_cbam=self.use_cbam, use_se=self.use_se)
         elif self.model_arc == 'deeplab_classification_binary':
             self.model = self._get_deeplab_v3(use_cbam=self.use_cbam, classification=True)
-        if self.use_multi_gpu:
-            self.parallel_model = utils.multi_gpu_model(self.model, gpus=self.gpu_count, cpu_relocation=True)
 
     def _get_deeplab_v3(self, use_cbam=False, use_se=False, classification=False):
         img_height, img_width = self.input_shape[0], self.input_shape[1]
@@ -81,12 +77,6 @@ class SDDModel:
             y = se_block(y)
         x = layers.concatenate([x, y])
         x = conv(x, num_filters=128, kernel_size=3)
-        x = layers.SpatialDropout2D(self.dropout_rate)(x)
-        x = conv(x, num_filters=128, kernel_size=3)
-        if use_cbam:
-            x = cbam(x)
-        if use_se:
-            x = se_block(x)
         x = layers.SpatialDropout2D(self.dropout_rate)(x)
         x = conv(x, num_filters=128, kernel_size=3)
         if use_cbam:
@@ -123,26 +113,10 @@ class SDDModel:
 
     def _compile(self):
         optimizer = optimizers.Adam(lr=self.lr)
-        if self.use_multi_gpu:
-            self._compile_model(self.parallel_model, optimizer)
-        else:
-            self._compile_model(self.model, optimizer)
-
-    def _compile_model(self, model, optimizer):
-        if self.model_arc == 'deeplab_classification_binary':
-            model.compile(optimizer, ['binary_crossentropy', sm.losses.bce_dice_loss],
-                          metrics={
-                              'classification_output': ['accuracy'],
-                              'output_layer': [sm.metrics.iou_score, sm.metrics.f1_score]
-                          })
-        else:
-            model.compile(optimizer, sm.losses.bce_dice_loss,
-                          metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
+        self.model.compile(optimizer, sm.losses.bce_dice_loss,
+                           metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
 
     def get_model(self):
         self._build_model()
         self._compile()
-        if self.use_multi_gpu:
-            return self.model, self.parallel_model
-        else:
-            return self.model
+        return self.model
