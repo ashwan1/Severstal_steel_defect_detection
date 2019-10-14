@@ -5,12 +5,12 @@ from keras import backend as K
 from keras import layers, models, optimizers, utils
 from keras.applications.mobilenet_v2 import MobileNetV2
 
-from nn_blocks import aspp, conv, cbam
+from nn_blocks import aspp, conv, cbam, se_block
 
 
 class SDDModel:
-    def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, use_cbam=False, n_classes=4,
-                 accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4):
+    def __init__(self, backbone, input_shape, lr, dropout_rate, model_arc, use_cbam=False, use_se=False,
+                 n_classes=4, accum_steps=0, layer_lrs=None, use_multi_gpu=False, gpu_count=4):
         self.backbone_name = backbone
         self.input_shape = input_shape
         self.n_classes = n_classes
@@ -18,6 +18,7 @@ class SDDModel:
         self.dropout_rate = dropout_rate
         self.model_arc = model_arc
         self.use_cbam = use_cbam
+        self.use_se = use_se
         self.accum_steps = accum_steps
         self.layer_lrs = layer_lrs
         self.model = None
@@ -49,15 +50,13 @@ class SDDModel:
             self.model = sm.Unet(self.backbone_name, input_shape=self.input_shape, classes=self.n_classes,
                                  activation='sigmoid', encoder_weights='imagenet')
         elif self.model_arc == 'deeplab':
-            self.model = self._get_deeplab_v3()
-        elif self.model_arc == 'deeplab_cbam':
-            self.model = self._get_deeplab_v3(use_cbam=True)
+            self.model = self._get_deeplab_v3(use_cbam=self.use_cbam, use_se=self.use_se)
         elif self.model_arc == 'deeplab_classification_binary':
             self.model = self._get_deeplab_v3(use_cbam=self.use_cbam, classification=True)
         if self.use_multi_gpu:
             self.parallel_model = utils.multi_gpu_model(self.model, gpus=self.gpu_count, cpu_relocation=True)
 
-    def _get_deeplab_v3(self, use_cbam=False, classification=False):
+    def _get_deeplab_v3(self, use_cbam=False, use_se=False, classification=False):
         img_height, img_width = self.input_shape[0], self.input_shape[1]
         c_o = None
         backbone_model = self._get_backbone_model()
@@ -78,12 +77,22 @@ class SDDModel:
         y = conv(backbone_model.get_layer(feature_layers[0]).output, 64, 1)
         if use_cbam:
             y = cbam(y)
+        if use_se:
+            y = se_block(y)
         x = layers.concatenate([x, y])
         x = conv(x, num_filters=128, kernel_size=3)
         x = layers.SpatialDropout2D(self.dropout_rate)(x)
         x = conv(x, num_filters=128, kernel_size=3)
         if use_cbam:
             x = cbam(x)
+        if use_se:
+            x = se_block(x)
+        x = layers.SpatialDropout2D(self.dropout_rate)(x)
+        x = conv(x, num_filters=128, kernel_size=3)
+        if use_cbam:
+            x = cbam(x)
+        if use_se:
+            x = se_block(x)
         h_t, w_t = K.int_shape(x)[1:3]
         scale = img_height // h_t, img_width // w_t
         x = layers.UpSampling2D(size=scale, interpolation='bilinear')(x)
@@ -127,7 +136,7 @@ class SDDModel:
                               'output_layer': [sm.metrics.iou_score, sm.metrics.f1_score]
                           })
         else:
-            model.compile(optimizer, sm.losses.bce_jaccard_loss,
+            model.compile(optimizer, sm.losses.bce_dice_loss,
                           metrics=[sm.metrics.iou_score, sm.metrics.f1_score])
 
     def get_model(self):

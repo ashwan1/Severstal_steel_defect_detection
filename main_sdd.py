@@ -2,6 +2,7 @@ import os
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from keras import callbacks, utils, models
 from sacred import Experiment
@@ -30,7 +31,7 @@ def config():
     seed = 42
     gpu_count = len(_CUDA_VISIBLE_DEVICES.split(','))
     backbone = 'resnet18'
-    batch_size = 5
+    batch_size = 4
     lr = 0.0001
     dropout_rate = 0.2
     data_path = 'data'
@@ -38,12 +39,13 @@ def config():
     img_size = (256, 1600, 3)
     use_multi_gpu = gpu_count > 1
     use_cbam = False
+    use_se = False
     do_classification = _MODEL_ARC == 'deeplab_classification_binary'
 
 
 @ex.automain
 def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
-        img_size, use_multi_gpu, gpu_count, use_cbam, do_classification, seed, _run):
+        img_size, use_multi_gpu, gpu_count, use_cbam, use_se, do_classification, seed, _run):
     artifacts_folder = Path(artifacts_folder)
     artifacts_folder.mkdir(parents=True, exist_ok=True)
     data_path = Path(data_path)
@@ -60,6 +62,10 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
     train_df['defect_4'] = data_df.EncodedPixels[3::4].values
     train_df['defect_count'] = train_df[train_df.columns[1:]].count(axis=1)
     train_df.reset_index(inplace=True, drop=True)
+    train_df['has_defect_1'] = (~train_df['defect_1'].isna()).astype(np.int8)
+    train_df['has_defect_2'] = (~train_df['defect_2'].isna()).astype(np.int8)
+    train_df['has_defect_3'] = (~train_df['defect_3'].isna()).astype(np.int8)
+    train_df['has_defect_4'] = (~train_df['defect_4'].isna()).astype(np.int8)
     train_df.fillna('', inplace=True)
     print(train_df.info())
     print(train_df.head(10))
@@ -73,9 +79,10 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
     if use_multi_gpu:
         sdd_model, parallel_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC,
                                              use_multi_gpu=use_multi_gpu, gpu_count=gpu_count,
-                                             use_cbam=use_cbam).get_model()
+                                             use_cbam=use_cbam, use_se=use_se).get_model()
     else:
-        sdd_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC, use_cbam=use_cbam).get_model()
+        sdd_model = SDDModel(backbone, img_size, lr, dropout_rate, _MODEL_ARC,
+                             use_cbam=use_cbam, use_se=use_se).get_model()
     sdd_model.summary()
     utils.plot_model(sdd_model, str(artifacts_folder / 'model.png'), show_shapes=True)
 
@@ -89,9 +96,9 @@ def run(backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
         ObserveMetrics(_run)
     ]
 
-    train_seq = DataSequence(seed, train_df, batch_size, img_size, 'data/train_images', shuffle=True,
+    train_seq = DataSequence(seed, train_df, batch_size, img_size, 'data/train_images', mode='train', shuffle=True,
                              augment=True, classification=do_classification)
-    val_seq = DataSequence(seed, val_df, batch_size, img_size, 'data/train_images', shuffle=False,
+    val_seq = DataSequence(seed, val_df, batch_size, img_size, 'data/train_images', mode='val', shuffle=False,
                            augment=False, classification=do_classification)
     if use_multi_gpu:
         training_model = parallel_model

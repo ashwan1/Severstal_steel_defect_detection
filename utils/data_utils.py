@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import cv2
 import random
 from keras.utils import Sequence
@@ -8,14 +9,18 @@ from utils.rle_utils import rle2mask
 
 class DataSequence(Sequence):
     def __init__(self, seed, df, batch_size, img_size,
-                 base_path, train=True, n_classes=4, shuffle=False,
+                 base_path, mode='train', n_classes=4, shuffle=False,
                  augment=False, classification=False):
         self.seed = seed
-        self.df = df
+        self.master_df = df
+        if mode == 'train':
+            self.df = self.get_samples_for_epoch()
+        else:
+            self.df = df
         self.batch_size = batch_size
         self.height, self.width, self.n_channels = img_size
         self.base_path = base_path
-        self.train = train
+        self.mode = mode
         self.n_classes = n_classes
         self.shuffle = shuffle
         self.augment = augment
@@ -27,11 +32,12 @@ class DataSequence(Sequence):
     def __getitem__(self, idx):
         flip_direction = None
         masks = None
+        is_defective = None
         batch = self.df[idx * self.batch_size: (idx + 1) * self.batch_size].reset_index(drop=True)
         images = np.zeros((len(batch.index), self.height, self.width, self.n_channels))
         if self.classification:
             is_defective = np.zeros((len(batch.index), 1), dtype='int')
-        if self.train:
+        if self.mode != 'test':
             masks = np.zeros((len(batch.index), self.height, self.width, self.n_classes), dtype='int')
         for row in batch.itertuples():
             image = cv2.imread(f'{self.base_path}/{row.image_id}')
@@ -42,13 +48,13 @@ class DataSequence(Sequence):
                 flip_direction = random.choice([-1, 0, 1])
                 image = self.augment_image(image, row.defect_count, flip_direction=flip_direction)
             images[row.Index] = image / 255.
-            if self.train:
-                rles = row[2:-1]
+            if self.mode != 'test':
+                rles = row[2:6]
                 mask = self.build_mask(rles, flip_direction)
                 masks[row.Index] = mask
             if self.classification:
                 is_defective[row.Index] = row.defect_count > 0
-        if self.train:
+        if self.mode != 'test':
             if self.classification:
                 return images, [is_defective, masks]
             else:
@@ -58,7 +64,9 @@ class DataSequence(Sequence):
 
     def on_epoch_end(self):
         if self.shuffle:
-            self.df = self.df.sample(frac=1, random_state=self.seed).reset_index(drop=True)
+            self.master_df = self.master_df.sample(frac=1, random_state=self.seed).reset_index(drop=True)
+        if self.mode == 'train':
+            self.df = self.get_samples_for_epoch()
 
     def augment_image(self, image, defect_count, flip_direction):
         image = cv2.flip(image, flip_direction)
@@ -104,3 +112,13 @@ class DataSequence(Sequence):
         image = image * (1 + illumination * 1.05)
         image = np.clip(image * 255, 0, 255).astype(np.uint8)
         return image
+
+    def get_samples_for_epoch(self):
+        samples_per_class = 200
+        df = self.master_df[self.master_df['defect_count'] == 0].sample(samples_per_class)
+        df = df.append(self.master_df[self.master_df['has_defect_1'] == 1].sample(samples_per_class), ignore_index=True)
+        df = df.append(self.master_df[self.master_df['has_defect_2'] == 1].sample(samples_per_class), ignore_index=True)
+        df = df.append(self.master_df[self.master_df['has_defect_3'] == 1].sample(samples_per_class), ignore_index=True)
+        df = df.append(self.master_df[self.master_df['has_defect_4'] == 1].sample(samples_per_class), ignore_index=True)
+        df = df.sample(frac=1).reset_index(drop=True)
+        return df

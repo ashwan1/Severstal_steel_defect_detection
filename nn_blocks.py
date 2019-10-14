@@ -105,3 +105,20 @@ def cbam(tensor, ratio=8):
     cbam_feature = _channel_attention(tensor, ratio)
     cbam_feature = _spatial_attention(cbam_feature)
     return cbam_feature
+
+
+def se_block(input_feature, ratio=8):
+    n_channels = K.int_shape(input_feature)[-1]
+
+    se_feature = layers.GlobalAveragePooling2D()(input_feature)
+    se_feature = layers.Reshape((1, 1, n_channels))(se_feature)
+    assert K.int_shape(se_feature)[1:] == (1, 1, n_channels)
+    se_feature = layers.Dense(n_channels // ratio, activation='relu')(se_feature)
+    assert K.int_shape(se_feature)[1:] == (1, 1, n_channels // ratio)
+    se_feature = layers.Dense(n_channels, activation='sigmoid')(se_feature)
+    assert K.int_shape(se_feature)[1:] == (1, 1, n_channels)
+    if K.image_data_format() == 'channels_first':
+        se_feature = layers.Permute((3, 1, 2))(se_feature)
+
+    se_feature = layers.multiply([input_feature, se_feature])
+    return se_feature
