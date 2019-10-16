@@ -107,10 +107,10 @@ def cbam(tensor, ratio=8):
     return cbam_feature
 
 
-def se_block(input_feature, ratio=8):
-    n_channels = K.int_shape(input_feature)[-1]
+def se_block(tensor, ratio=8):
+    n_channels = K.int_shape(tensor)[-1]
 
-    se_feature = layers.GlobalAveragePooling2D()(input_feature)
+    se_feature = layers.GlobalAveragePooling2D()(tensor)
     se_feature = layers.Reshape((1, 1, n_channels))(se_feature)
     assert K.int_shape(se_feature)[1:] == (1, 1, n_channels)
     se_feature = layers.Dense(n_channels // ratio, activation='relu')(se_feature)
@@ -120,5 +120,5 @@ def se_block(input_feature, ratio=8):
     if K.image_data_format() == 'channels_first':
         se_feature = layers.Permute((3, 1, 2))(se_feature)
 
-    se_feature = layers.multiply([input_feature, se_feature])
+    se_feature = layers.multiply([tensor, se_feature])
     return se_feature

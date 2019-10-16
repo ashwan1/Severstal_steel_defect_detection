@@ -131,7 +131,7 @@ class DataSequence(Sequence):
 
 class ClassificationDataSeq(Sequence):
     def __init__(self, seed, df, batch_size, img_size,
-                 base_path, mode='train', n_classes=5, shuffle=False,
+                 base_path, mode='train', n_classes=4, shuffle=False,
                  augment=False):
         self.seed = seed
         self.df = df
@@ -161,10 +161,7 @@ class ClassificationDataSeq(Sequence):
                 image = self.augment_image(image)
             images[row.Index] = image / 255.
             if self.mode != 'test':
-                if row.defect_count == 0:
-                    labels[row.Index] = [0] * 5
-                else:
-                    labels[row.Index] = [0] + list(row[7:])
+                labels[row.Index] = row[7:]
         if self.mode != 'test':
             return images, labels
         else:
