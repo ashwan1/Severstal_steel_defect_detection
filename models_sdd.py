@@ -6,10 +6,11 @@ from keras import layers, models, optimizers, metrics
 from keras.applications.mobilenet_v2 import MobileNetV2
 
 from nn_blocks import aspp, conv, cbam, se_block
+from utils.model_utils import insert_layer_nonseq, mish_layer_factory
 
 _FEATURE_LAYERS = {
             # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
-            'resnet18': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
+            'resnet18': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1_lambda_18'],
             # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
             'resnet34': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
             # o/p shapes: [(64, 400, 144), (32, 200, 192), (16, 100, 576), (8, 50, 1280)]
@@ -128,6 +129,7 @@ class SegmentationModel:
 
     def get_model(self):
         self._build_model()
+        self.model = insert_layer_nonseq(self.model, '.*relu.*', mish_layer_factory, position='replace')
         self._compile()
         return self.model
 
@@ -173,5 +175,6 @@ class ClassificationModel:
 
     def get_model(self):
         self._build_model()
+        self.model = insert_layer_nonseq(self.model, '.*relu.*', mish_layer_factory, position='replace')
         self._compile()
         return self.model

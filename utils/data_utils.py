@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 import random
 import pandas as pd
+from tqdm import tqdm
 from keras.utils import Sequence
 
 from utils.rle_utils import rle2mask
@@ -252,5 +253,55 @@ def prepare_data_df(data_df):
     df['has_defect_2'] = (~df['defect_2'].isna()).astype(np.int8)
     df['has_defect_3'] = (~df['defect_3'].isna()).astype(np.int8)
     df['has_defect_4'] = (~df['defect_4'].isna()).astype(np.int8)
-    df.fillna('', inplace=True)
     return df
+
+
+def generate_mix_match(orig_df, defect_type, count):
+    mix_match_dict = {
+        'image_id': [],
+        'defect_1': [],
+        'defect_2': [],
+        'defect_3': [],
+        'defect_4': [],
+        'defect_count': [],
+        'has_defect_1': [],
+        'has_defect_2': [],
+        'has_defect_3': [],
+        'has_defect_4': []
+    }
+    no_defect_df = orig_df[orig_df.defect_count == 0]
+    defect_df = orig_df[~orig_df[f'defect_{defect_type}'].isna() & orig_df.defect_count == 1]
+    for _ in tqdm(range(count), desc=f'generating {count} mix-matches for defect {defect_type}'):
+        no_defect_img_name = no_defect_df.sample().iloc[0].image_id
+        no_defect_img = _read_img(f'data/train_images/{no_defect_img_name}')
+        defective_sample = defect_df.sample()
+        defect_img = _read_img(f'data/train_images/{defective_sample.iloc[0].image_id}')
+        mask = rle2mask(defective_sample.iloc[0][f'defect_{defect_type}'])
+        contours, hierarchy = cv2.findContours(image=mask, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            x, y, w, h = cv2.boundingRect(c)
+            no_defect_img[y:y + h, x:x + w, :] = defect_img[y:y + h, x:x + w, :]
+        _write_image(f'data/train_images/aug_{defect_type}_{no_defect_img_name}', no_defect_img)
+        mix_match_dict['image_id'].append(f'aug_{defect_type}_{no_defect_img_name}')
+        mix_match_dict[f'defect_{defect_type}'].append(defective_sample.iloc[0][f'defect_{defect_type}'])
+        mix_match_dict['defect_count'].append(1)
+        mix_match_dict[f'has_defect_{defect_type}'].append(1)
+        for j in range(1, 5):
+            if j != defect_type:
+                mix_match_dict[f'defect_{j}'].append(np.nan)
+                mix_match_dict[f'has_defect_{j}'].append(0)
+    mix_match_df = pd.DataFrame(mix_match_dict)
+    return mix_match_df
+
+
+def _read_img(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError
+    return img
+
+
+def _write_image(path, img):
+    result = cv2.imwrite(path, img)
+    if not result:
+        raise FileNotFoundError

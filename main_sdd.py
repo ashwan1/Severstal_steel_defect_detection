@@ -11,11 +11,9 @@ from sklearn.model_selection import train_test_split
 
 from custom_objects.callbacks import ObserveMetrics
 from models_sdd import SegmentationModel, ClassificationModel
-from utils.data_utils import DataSequence, prepare_data_df, ClassificationDataSeq
+from utils.data_utils import DataSequence, prepare_data_df, ClassificationDataSeq, generate_mix_match
 
-_CUDA_VISIBLE_DEVICES = "3"
 _MODEL_ARC = 'deeplab'
-os.environ["CUDA_VISIBLE_DEVICES"] = _CUDA_VISIBLE_DEVICES
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
 ex = Experiment(name=_MODEL_ARC)
@@ -36,16 +34,15 @@ def train_model(model, train_seq, val_seq, training_callbacks):
 @ex.config
 def config():
     seed = 42
-    gpu_count = len(_CUDA_VISIBLE_DEVICES.split(','))
     backbone = 'resnet18'
     cfn_backbone = 'resnet18'
+    cfn_batch_multiplier = 4
     batch_size = 4
     lr = 0.0001
     dropout_rate = 0.2
     data_path = 'data'
     artifacts_folder = f'artifacts/{_MODEL_ARC}/{backbone}/{time.strftime("%d-%m-%y_%H:%M", time.localtime())}'
     img_size = (256, 1600, 3)
-    use_multi_gpu = gpu_count > 1
     use_cbam = False
     use_se = False
     cfn_model_path = None
@@ -54,7 +51,7 @@ def config():
 
 @ex.automain
 def run(backbone, cfn_backbone, batch_size, lr, dropout_rate, data_path, artifacts_folder,
-        img_size, use_cbam, use_se, cfn_model_path, use_transpose_conv, seed, _run):
+        img_size, use_cbam, use_se, cfn_model_path, use_transpose_conv, cfn_batch_multiplier, seed, _run):
     artifacts_folder = Path(artifacts_folder)
     artifacts_folder.mkdir(parents=True, exist_ok=True)
     data_path = Path(data_path)
@@ -64,7 +61,15 @@ def run(backbone, cfn_backbone, batch_size, lr, dropout_rate, data_path, artifac
     print(data_df.head(10))
 
     train_df, val_df = train_test_split(data_df, test_size=0.2, random_state=seed)
-    print(f'length of train and val data: {len(train_df.index)}, {len(val_df.index)}')
+    print(f'length of train and val data before mix-match: {len(train_df.index)}, {len(val_df.index)}')
+
+    mix_match_defect_1 = generate_mix_match(train_df, 1, 400)
+    mix_match_defect_2 = generate_mix_match(train_df, 2, 1000)
+    mix_match_defect_4 = generate_mix_match(train_df, 1, 400)
+
+    train_df = train_df.append(mix_match_defect_1).append(mix_match_defect_2).append(mix_match_defect_4)
+    train_df = train_df.sample(frac=1).reset_index(drop=True)
+    print(f'length of train and val data after mix-match: {len(train_df.index)}, {len(val_df.index)}')
 
     ckpt_path = artifacts_folder / 'ckpts'
     ckpt_path.mkdir(exist_ok=True, parents=True)
@@ -81,9 +86,11 @@ def run(backbone, cfn_backbone, batch_size, lr, dropout_rate, data_path, artifac
             callbacks.TerminateOnNaN(),
             ObserveMetrics(_run, 'cfn')
         ]
-        train_seq = ClassificationDataSeq(seed, train_df, batch_size*4, img_size, 'data/train_images', mode='train',
+        train_seq = ClassificationDataSeq(seed, train_df, batch_size*cfn_batch_multiplier, img_size,
+                                          'data/train_images', mode='train',
                                           shuffle=True, augment=True)
-        val_seq = ClassificationDataSeq(seed, val_df, batch_size*4, img_size, 'data/train_images', mode='val',
+        val_seq = ClassificationDataSeq(seed, val_df, batch_size*cfn_batch_multiplier, img_size,
+                                        'data/train_images', mode='val',
                                         shuffle=False, augment=False)
         train_model(classification_model, train_seq, val_seq, training_callbacks)
         models.save_model(classification_model, str(artifacts_folder / 'cfn_model_best.h5'))
