@@ -105,3 +105,51 @@ def cbam(tensor, ratio=8):
     cbam_feature = _channel_attention(tensor, ratio)
     cbam_feature = _spatial_attention(cbam_feature)
     return cbam_feature
+
+
+def se_block(tensor, ratio=8):
+    n_channels = K.int_shape(tensor)[-1]
+
+    se_feature = layers.GlobalAveragePooling2D()(tensor)
+    se_feature = layers.Reshape((1, 1, n_channels))(se_feature)
+    assert K.int_shape(se_feature)[1:] == (1, 1, n_channels)
+    se_feature = layers.Dense(n_channels // ratio, activation='relu')(se_feature)
+    assert K.int_shape(se_feature)[1:] == (1, 1, n_channels // ratio)
+    se_feature = layers.Dense(n_channels, activation='sigmoid')(se_feature)
+    assert K.int_shape(se_feature)[1:] == (1, 1, n_channels)
+    if K.image_data_format() == 'channels_first':
+        se_feature = layers.Permute((3, 1, 2))(se_feature)
+
+    se_feature = layers.multiply([tensor, se_feature])
+    return se_feature
+
+
+def fpn_block(input_tensor, cfn_features, pyramid_channels=256, skip=None, for_unet=False):
+    input_channels = K.int_shape(input_tensor)[-1]
+    cfn_dims = K.int_shape(cfn_features)
+    pyramid_channels += cfn_dims[-1]
+    if input_channels != pyramid_channels and not for_unet:
+        input_tensor = layers.Conv2D(pyramid_channels, 1, kernel_initializer='he_normal')(input_tensor)
+    elif for_unet:
+        input_tensor = conv(input_tensor, 64, 1)
+
+    if not for_unet:
+        skip = layers.Conv2D(pyramid_channels, 1, kernel_initializer='he_normal')(skip)
+    else:
+        skip = layers.Conv2D(64, 1, kernel_initializer='he_normal')(skip)
+
+    x = layers.UpSampling2D((2, 2), interpolation='bilinear')(input_tensor)
+    if for_unet:
+        x = layers.concatenate([x, skip])
+    else:
+        x = layers.add([x, skip])
+    skip_dims = K.int_shape(skip)
+    scale = int(skip_dims[1] // cfn_dims[1]), int(skip_dims[2] // cfn_dims[2])
+    cfn_features = layers.UpSampling2D(scale, interpolation='bilinear')(cfn_features)
+    if for_unet:
+        n_cfn_channels = cfn_dims[-1] // 8
+    else:
+        n_cfn_channels = cfn_dims[-1]
+    cfn_features = conv(cfn_features, n_cfn_channels, 1)
+    x = layers.concatenate([x, cfn_features])
+    return x
