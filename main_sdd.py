@@ -11,9 +11,9 @@ from sklearn.model_selection import train_test_split
 
 from custom_objects.callbacks import ObserveMetrics
 from models_sdd import SegmentationModel, ClassificationModel
-from utils.data_utils import DataSequence, prepare_data_df, ClassificationDataSeq, generate_mix_match
+from utils.data_utils import DataSequence, prepare_data_df, ClassificationDataSeq, duplicate_data
 
-_MODEL_ARC = 'deeplab'
+_MODEL_ARC = 'only_cfn'
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
 ex = Experiment(name=_MODEL_ARC)
@@ -61,15 +61,23 @@ def run(backbone, cfn_backbone, batch_size, lr, dropout_rate, data_path, artifac
     print(data_df.head(10))
 
     train_df, val_df = train_test_split(data_df, test_size=0.2, random_state=seed)
-    print(f'length of train and val data before mix-match: {len(train_df.index)}, {len(val_df.index)}')
+    print(f'\nlength of train and val data before duplication: {len(train_df.index)}, {len(val_df.index)}')
+    print(f"shape for 0, 1, 2, 3, 4 defects respectively:\n"
+          f"{train_df[train_df.defect_count == 0].shape}\n"
+          f"{train_df[train_df.has_defect_1 == 1].shape}\n"
+          f"{train_df[train_df.has_defect_2 == 1].shape}\n"
+          f"{train_df[train_df.has_defect_3 == 1].shape}\n"
+          f"{train_df[train_df.has_defect_4 == 1].shape}\n")
 
-    mix_match_defect_1 = generate_mix_match(train_df, 1, 400)
-    mix_match_defect_2 = generate_mix_match(train_df, 2, 1000)
-    mix_match_defect_4 = generate_mix_match(train_df, 1, 400)
-
-    train_df = train_df.append(mix_match_defect_1).append(mix_match_defect_2).append(mix_match_defect_4)
+    train_df = duplicate_data(train_df, 2, 10)
+    print(f'\nlength of train and val data after duplication: {len(train_df.index)}, {len(val_df.index)}')
+    print(f"shape for 0, 1, 2, 3, 4 defects respectively:\n"
+          f"{train_df[train_df.defect_count == 0].shape}\n"
+          f"{train_df[train_df.has_defect_1 == 1].shape}\n"
+          f"{train_df[train_df.has_defect_2 == 1].shape}\n"
+          f"{train_df[train_df.has_defect_3 == 1].shape}\n"
+          f"{train_df[train_df.has_defect_4 == 1].shape}\n")
     train_df = train_df.sample(frac=1).reset_index(drop=True)
-    print(f'length of train and val data after mix-match: {len(train_df.index)}, {len(val_df.index)}')
 
     ckpt_path = artifacts_folder / 'ckpts'
     ckpt_path.mkdir(exist_ok=True, parents=True)
@@ -86,10 +94,10 @@ def run(backbone, cfn_backbone, batch_size, lr, dropout_rate, data_path, artifac
             callbacks.TerminateOnNaN(),
             ObserveMetrics(_run, 'cfn')
         ]
-        train_seq = ClassificationDataSeq(seed, train_df, batch_size*cfn_batch_multiplier, img_size,
+        train_seq = ClassificationDataSeq(seed, train_df, int(batch_size*cfn_batch_multiplier), img_size,
                                           'data/train_images', mode='train',
                                           shuffle=True, augment=True)
-        val_seq = ClassificationDataSeq(seed, val_df, batch_size*cfn_batch_multiplier, img_size,
+        val_seq = ClassificationDataSeq(seed, val_df, int(batch_size*cfn_batch_multiplier), img_size,
                                         'data/train_images', mode='val',
                                         shuffle=False, augment=False)
         train_model(classification_model, train_seq, val_seq, training_callbacks)

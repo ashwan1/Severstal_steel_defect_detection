@@ -122,3 +122,34 @@ def se_block(tensor, ratio=8):
 
     se_feature = layers.multiply([tensor, se_feature])
     return se_feature
+
+
+def fpn_block(input_tensor, cfn_features, pyramid_channels=256, skip=None, for_unet=False):
+    input_channels = K.int_shape(input_tensor)[-1]
+    cfn_dims = K.int_shape(cfn_features)
+    pyramid_channels += cfn_dims[-1]
+    if input_channels != pyramid_channels and not for_unet:
+        input_tensor = layers.Conv2D(pyramid_channels, 1, kernel_initializer='he_normal')(input_tensor)
+    elif for_unet:
+        input_tensor = conv(input_tensor, 64, 1)
+
+    if not for_unet:
+        skip = layers.Conv2D(pyramid_channels, 1, kernel_initializer='he_normal')(skip)
+    else:
+        skip = layers.Conv2D(64, 1, kernel_initializer='he_normal')(skip)
+
+    x = layers.UpSampling2D((2, 2), interpolation='bilinear')(input_tensor)
+    if for_unet:
+        x = layers.concatenate([x, skip])
+    else:
+        x = layers.add([x, skip])
+    skip_dims = K.int_shape(skip)
+    scale = int(skip_dims[1] // cfn_dims[1]), int(skip_dims[2] // cfn_dims[2])
+    cfn_features = layers.UpSampling2D(scale, interpolation='bilinear')(cfn_features)
+    if for_unet:
+        n_cfn_channels = cfn_dims[-1] // 8
+    else:
+        n_cfn_channels = cfn_dims[-1]
+    cfn_features = conv(cfn_features, n_cfn_channels, 1)
+    x = layers.concatenate([x, cfn_features])
+    return x

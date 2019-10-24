@@ -4,30 +4,30 @@ from efficientnet.keras import EfficientNetB0, EfficientNetB1, EfficientNetB3, E
 from keras import backend as K
 from keras import layers, models, optimizers, metrics
 from keras.applications.mobilenet_v2 import MobileNetV2
+from keras.applications.densenet import DenseNet121
 
-from nn_blocks import aspp, conv, cbam, se_block
-from utils.model_utils import insert_layer_nonseq, mish_layer_factory
+from nn_blocks import aspp, conv, cbam, se_block, fpn_block
 
 _FEATURE_LAYERS = {
-            # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
-            'resnet18': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1_lambda_18'],
-            # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
-            'resnet34': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
-            # o/p shapes: [(64, 400, 144), (32, 200, 192), (16, 100, 576), (8, 50, 1280)]
-            'mobilenetv2': ['block_3_expand_relu', 'block_6_expand_relu', 'block_13_expand_relu', 'out_relu'],
-            # o/p shapes: [(64, 400, 144), (32, 200, 240), (16, 100, 672), (8, 50, 1280)]
-            'efficientnetb0': ['block3a_expand_activation', 'block4a_expand_activation',
-                               'block6a_expand_activation', 'top_activation'],
-            # o/p shapes: [(64, 400, 144), (32, 200, 240), (16, 100, 672), (8, 50, 1280)]
-            'efficientnetb1': ['block3a_expand_activation', 'block4a_expand_activation',
-                               'block6a_expand_activation', 'top_activation'],
-            # o/p shapes: [(64, 400, 192), (32, 200, 288), (16, 100, 816), (8, 50, 1536)]
-            'efficientnetb3': ['block3a_expand_activation', 'block4a_expand_activation',
-                               'block6a_expand_activation', 'top_activation'],
-            # o/p shapes: [(64, 400, 240), (32, 200, 384), (16, 100, 1056), (8, 50, 2048)]
-            'efficientnetb5': ['block3a_expand_activation', 'block4a_expand_activation',
-                               'block6a_expand_activation', 'top_activation']
-        }
+    # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
+    'resnet18': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
+    # o/p shapes: [(64, 400, 64), (32, 200, 128), (16, 100, 256), (8, 50, 512)]
+    'resnet34': ['stage2_unit1_relu1', 'stage3_unit1_relu1', 'stage4_unit1_relu1', 'relu1'],
+    # o/p shapes: [(64, 400, 144), (32, 200, 192), (16, 100, 576), (8, 50, 1280)]
+    'mobilenetv2': ['block_3_expand_relu', 'block_6_expand_relu', 'block_13_expand_relu', 'out_relu'],
+    # o/p shapes: [(64, 400, 144), (32, 200, 240), (16, 100, 672), (8, 50, 1280)]
+    'efficientnetb0': ['block3a_expand_activation', 'block4a_expand_activation',
+                       'block6a_expand_activation', 'top_activation'],
+    # o/p shapes: [(64, 400, 144), (32, 200, 240), (16, 100, 672), (8, 50, 1280)]
+    'efficientnetb1': ['block3a_expand_activation', 'block4a_expand_activation',
+                       'block6a_expand_activation', 'top_activation'],
+    # o/p shapes: [(64, 400, 192), (32, 200, 288), (16, 100, 816), (8, 50, 1536)]
+    'efficientnetb3': ['block3a_expand_activation', 'block4a_expand_activation',
+                       'block6a_expand_activation', 'top_activation'],
+    # o/p shapes: [(64, 400, 240), (32, 200, 384), (16, 100, 1056), (8, 50, 2048)]
+    'efficientnetb5': ['block3a_expand_activation', 'block4a_expand_activation',
+                       'block6a_expand_activation', 'top_activation']
+}
 
 
 class SegmentationModel:
@@ -51,15 +51,75 @@ class SegmentationModel:
 
     def _build_model(self):
         if self.model_arc == 'unet':
-            self.model = sm.Unet(self.backbone_name, input_shape=self.input_shape, classes=self.n_classes,
-                                 activation='sigmoid', encoder_weights='imagenet')
+            self.model = self._get_unet()
         elif self.model_arc == 'deeplab':
             self.model = self._get_deeplab_v3(use_cbam=self.use_cbam, use_se=self.use_se)
+        elif self.model_arc == 'fpn':
+            self.model = self._get_fpn()
+
+    def _get_unet(self):
+        backbone_model = self._get_backbone_model()
+        feature_layers = _FEATURE_LAYERS[self.backbone_name]
+        img_features = backbone_model.get_layer(feature_layers[-1]).output
+        cfn_features = None
+        if self.cfn_model is not None:
+            cfn_model = models.Model(inputs=self.cfn_model.input,
+                                     outputs=self.cfn_model.get_layer(feature_layers[-1]).output)
+            for layer in cfn_model.layers:
+                layer.trainable = False
+            cfn_features = cfn_model(backbone_model.input)
+        skips = [backbone_model.get_layer(n).output for n in feature_layers[:-1]]
+
+        p1 = fpn_block(img_features, cfn_features, skip=skips[-1], for_unet=True)
+        p2 = fpn_block(p1, cfn_features, skip=skips[-2], for_unet=True)
+        p3 = fpn_block(p2, cfn_features, skip=skips[-3], for_unet=True)
+
+        x = layers.UpSampling2D(4, interpolation='bilinear')(p3)
+        x = layers.Conv2D(self.n_classes, (1, 1))(x)
+        o = layers.Activation('sigmoid', name='output_layer')(x)
+        return models.Model(inputs=backbone_model.input, outputs=o)
+
+    def _get_fpn(self):
+        pyramid_features = 128
+        seg_features = 64
+        backbone_model = self._get_backbone_model()
+        feature_layers = _FEATURE_LAYERS[self.backbone_name]
+        img_features = backbone_model.get_layer(feature_layers[-1]).output
+        cfn_features = None
+        if self.cfn_model is not None:
+            cfn_model = models.Model(inputs=self.cfn_model.input,
+                                     outputs=self.cfn_model.get_layer(feature_layers[-1]).output)
+            for layer in cfn_model.layers:
+                layer.trainable = False
+            cfn_features = cfn_model(backbone_model.input)
+        skips = [backbone_model.get_layer(n).output for n in feature_layers[:-1]]
+
+        p1 = fpn_block(img_features, cfn_features, pyramid_features, skips[-1])
+        p2 = fpn_block(p1, cfn_features, pyramid_features, skips[-2])
+        p3 = fpn_block(p2, cfn_features, pyramid_features, skips[-3])
+
+        s1 = conv(p1, seg_features, 3)
+        s1 = conv(s1, seg_features, 3)
+        s2 = conv(p2, seg_features, 3)
+        s2 = conv(s2, seg_features, 3)
+        s3 = conv(p3, seg_features, 3)
+        s3 = conv(s3, seg_features, 3)
+
+        s1 = layers.UpSampling2D(4, interpolation='bilinear')(s1)
+        s2 = layers.UpSampling2D(2, interpolation='bilinear')(s2)
+
+        x = layers.concatenate([s1, s2, s3])
+        x = layers.SpatialDropout2D(self.dropout_rate)(x)
+
+        x = conv(x, seg_features, 3)
+        x = layers.UpSampling2D(4, interpolation='bilinear')(x)
+        x = layers.Conv2D(self.n_classes, (1, 1))(x)
+        o = layers.Activation('sigmoid', name='output_layer')(x)
+        return models.Model(inputs=backbone_model.input, outputs=o)
 
     def _get_deeplab_v3(self, use_cbam=False, use_se=False):
         img_height, img_width = self.input_shape[0], self.input_shape[1]
         backbone_model = self._get_backbone_model()
-        assert backbone_model is not None, f'backbone should be one of {list(_FEATURE_LAYERS.keys())[:3]}'
         feature_layers = _FEATURE_LAYERS[self.backbone_name]
         img_features = backbone_model.get_layer(feature_layers[2]).output
         if use_cbam:
@@ -120,6 +180,7 @@ class SegmentationModel:
             backbone_model = ResNet34(input_shape=self.input_shape, include_top=False, weights='imagenet')
         elif self.backbone_name == 'mobilenetv2':
             backbone_model = MobileNetV2(input_shape=self.input_shape, include_top=False, weights='imagenet')
+        assert backbone_model is not None, f'backbone should be one of {list(_FEATURE_LAYERS.keys())[:3]}'
         return backbone_model
 
     def _compile(self):
@@ -129,7 +190,6 @@ class SegmentationModel:
 
     def get_model(self):
         self._build_model()
-        self.model = insert_layer_nonseq(self.model, '.*relu.*', mish_layer_factory, position='replace')
         self._compile()
         return self.model
 
@@ -166,6 +226,8 @@ class ClassificationModel:
             backbone_model = EfficientNetB3(input_shape=self.input_shape, include_top=False, weights='imagenet')
         elif self.backbone_name == 'efficientnetb5':
             backbone_model = EfficientNetB5(input_shape=self.input_shape, include_top=False, weights='imagenet')
+        elif self.backbone_name == 'densenet':
+            backbone_model = DenseNet121(input_shape=self.input_shape, include_top=False, weights='imagenet')
         return backbone_model
 
     def _compile(self):
@@ -175,6 +237,5 @@ class ClassificationModel:
 
     def get_model(self):
         self._build_model()
-        self.model = insert_layer_nonseq(self.model, '.*relu.*', mish_layer_factory, position='replace')
         self._compile()
         return self.model

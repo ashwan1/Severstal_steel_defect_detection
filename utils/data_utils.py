@@ -253,6 +253,7 @@ def prepare_data_df(data_df):
     df['has_defect_2'] = (~df['defect_2'].isna()).astype(np.int8)
     df['has_defect_3'] = (~df['defect_3'].isna()).astype(np.int8)
     df['has_defect_4'] = (~df['defect_4'].isna()).astype(np.int8)
+    df.fillna('', inplace=True)
     return df
 
 
@@ -305,3 +306,12 @@ def _write_image(path, img):
     result = cv2.imwrite(path, img)
     if not result:
         raise FileNotFoundError
+
+
+def duplicate_data(orig_data, defect_class, times):
+    new_data = orig_data.copy()
+    for _ in tqdm(range(times), desc=f'duplicating defect {defect_class}'):
+        new_data = new_data.append(
+            orig_data[orig_data[f'has_defect_{defect_class}'] == 1][orig_data.defect_count == 1])
+    new_data = new_data.sample(frac=1).reset_index(drop=True)
+    return new_data

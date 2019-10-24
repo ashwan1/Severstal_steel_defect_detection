@@ -127,3 +127,5 @@ dmypy.json
 
 data/
 artifacts/
+jupyter_notebooks/models/
+jupyter_notebooks/gi*
